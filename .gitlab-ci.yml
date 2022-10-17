@@ -1,0 +1,104 @@
+variables:
+  REMOTE_HOST: deploy@172.16.4.209
+  REMOTE_DIR: app
+stages:
+  - test
+  - build
+  - deploy
+
+test_frontend-job:
+  image: node:lts-slim
+  stage: test
+  script:
+    - echo "Running the react Frontend quality assurance..."
+    - cd client
+    - npm install
+    - npm run lint
+    - npm run test:ci
+    - echo "Frontend QA complete"
+  except:
+    - main
+
+test_backend_job:
+  image: node:lts-slim
+  stage: test
+  script:
+    - echo "Running Backend Quality Assurance..."
+    - cd server
+    - npm install
+    - npm run lint
+    - echo "Backend QA complete"
+  except:
+    - main
+
+build-job:
+  image: node:lts-slim
+  stage: build
+  script:
+    - echo "Building React Frontend..."
+    - cd client
+    - npm install
+    - npm run build:prod
+    - echo "Frontend build complete"
+  artifacts:
+    paths:
+      - ./client/build
+  #only:
+  #  - main
+
+deploy_job:
+  image: docker:latest
+  stage: deploy
+  services:
+    - docker:dind
+  script:
+    # Prepare env variables
+    - export FRONTEND_IMAGE="${CI_REGISTRY_IMAGE}/frontend"
+    - export API_IMAGE="${CI_REGISTRY_IMAGE}/api"
+    - export DB_IMAGE="${CI_REGISTRY_IMAGE}/db"
+    - echo ${FRONTEND_IMAGE}
+    - echo ${API_IMAGE}
+    - echo ${DB_IMAGE}
+    # Install needed tools
+    - apk update && apk add rsync openssh
+
+    # Copy the student-user SSH key to be able to log in to the VM
+    - mkdir -p ~/.ssh && (umask  077 ; echo "${DEPLOY_KEY_PRIVATE}" | base64 -d > ~/.ssh/id_rsa)
+    # Disable key checking
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    # Build the frontend image
+    - docker build -f client/Dockerfile -t "${FRONTEND_IMAGE}" ./client
+    # Build the backend image
+    - docker build -f server/Dockerfile -t "${API_IMAGE}" ./server
+    # Build the database image
+    - docker build -f db/Dockerfile -t "${DB_IMAGE}" ./db
+    # Login to Gitlab
+    - docker login -u gitlab-ci-token -p "${CI_JOB_TOKEN}" "${CI_REGISTRY}"
+    # Push image to Gitlab Registry
+    - docker push "${FRONTEND_IMAGE}"
+    - docker push "${API_IMAGE}"
+    - docker push "${DB_IMAGE}"
+    # Create directory for deploying to remote
+    - mkdir "${REMOTE_DIR}"
+    - cp docker-compose.production.yml "${REMOTE_DIR}/docker-compose.yml"
+    - echo "FRONTEND_IMAGE=${FRONTEND_IMAGE}" >> "${REMOTE_DIR}/.env"
+    - echo "API_IMAGE=${API_IMAGE}" >> "${REMOTE_DIR}/.env"
+    - echo "DB_IMAGE=${DB_IMAGE}" >> "${REMOTE_DIR}/.env"
+    - echo "DB_USER=${DB_USER}" >> "${REMOTE_DIR}/.env"
+    - echo "DB_PASSWORD=${DB_PASSWORD}" >> "${REMOTE_DIR}/.env"
+    - echo "JWT_KEY=${JWT_KEY}" >> "${REMOTE_DIR}/.env"
+    - cat "${REMOTE_DIR}/.env"
+    # Copy files to server
+    - rsync -r "${REMOTE_DIR}" "${REMOTE_HOST}:./"
+    # Open SSH connection and start the containers
+    - ssh ${REMOTE_HOST} /bin/bash "
+        echo ${REMOTE_DIR};
+        cd ~/$REMOTE_DIR;
+        docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY;
+        docker-compose pull;
+        docker-compose up -d --force-recreate
+      "
+
+  #only:
+  #  - main
+  #when: manual

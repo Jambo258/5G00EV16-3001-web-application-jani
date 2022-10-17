@@ -1,0 +1,37 @@
+version: '2.4'
+services:
+  frontend:
+    image: "users/client"
+    ports:
+      - "80:80"
+    environment:
+      REACT_APP_BACKEND_URL: http://localhost:5000/api
+    restart: always
+  api:
+    image: "users/api"
+    environment:
+      DB_NAME: users
+      DB_USER: user
+      DB_HOST: db
+      DB_PASSWORD: pass
+      DB_PORT: 5432
+      JWT_KEY: my_super_secret_jwt_key
+    ports:
+     - "5000:5000"
+    restart: always
+  db:
+    image: "users/db"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: users
+    ports:
+      - "5432:5432"
+    restart: always
+    volumes:
+      - /var/lib/postgresql/data
+  adminer:
+    image: adminer
+    ports:
+      - "8080:8080"
+    restart: always
